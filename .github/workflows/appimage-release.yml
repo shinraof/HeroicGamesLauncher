@@ -44,6 +44,13 @@ jobs:
             -c.publish.repo="${GITHUB_REPOSITORY#*/}"
           cd dist
           sha256sum Heroic-*-linux-x86_64.AppImage > SHA256SUMS
+      - name: Test additional application startup
+        run: |
+          sudo chown root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          CI=e2e xvfb-run -a dbus-run-session -- pnpm exec playwright test \
+            e2e/additional_application.spec.ts e2e/companion_proton_startup.spec.ts \
+            --output=dist/companion-test-results
       - name: Retain build artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -64,9 +71,11 @@ jobs:
           - Set the launch order and a delay of 0–60 seconds.
           - Disabling the option preserves the saved configuration.
 
+          Fixes a helper preventing the main game from starting under Proton/UMU. Both applications can now run in the same prefix without waiting for the helper to exit, including with zero launch delay.
+
           Linux x86_64 AppImage. Download the AppImage and SHA256SUMS, verify with `sha256sum -c SHA256SUMS`, then make the AppImage executable and run it.
 
-          Validation: build, type check, and 187 unit tests passed. Six GUI/integration tests and the locally packaged AppImage smoke test passed in the development environment. Wine/Proton integration tests use recording substitutes; actual Windows game execution has not been tested.
+          Validation: build, type check, unit tests, and GUI/integration regression tests run before publication. The regression tests keep a companion running while the game starts, using recording Wine/Proton/UMU substitutes. Actual Windows game execution has not been tested in this environment.
           NOTES
           gh release create "$GITHUB_REF_NAME" \
             "dist/Heroic-${RELEASE_VERSION}-linux-x86_64.AppImage" dist/SHA256SUMS \

@@ -656,6 +656,9 @@ type ProtonVerb =
 
 export type WineCommandArgs = {
   signal?: AbortSignal
+  // Resolve after starting the runner, allowing a long-lived application to
+  // keep running without blocking another launch in the same prefix.
+  background?: boolean
   commandParts: string[]
   wait?: boolean
   protonVerb?: ProtonVerb

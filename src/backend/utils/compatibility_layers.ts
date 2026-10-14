@@ -509,6 +509,15 @@ export type AllowedWineFlags = Pick<
   '--wine' | '--wrapper' | '--no-wine'
 >
 
+// waitforexitandrun waits for every process in the prefix, including a
+// companion that may already be running. Both applications must be allowed
+// to run concurrently when the additional application feature is enabled.
+export function getProtonLaunchVerb(gameSettings: GameSettings) {
+  return gameSettings.additionalApplication?.enabled
+    ? 'run'
+    : 'waitforexitandrun'
+}
+
 /**
  * Returns a LegendaryCommand with the required flags to use a specified Wine version
  * @param wineBin The full path to the Wine binary (`wine`/`wine64`/`proton`)
@@ -541,7 +550,9 @@ export async function getWineFlags(
       partialCommand = {
         '--no-wine': true,
         '--wrapper': NonEmptyString.parse(
-          addProtonBin ? `${wrapper} "${wineBin}" waitforexitandrun` : wrapper
+          addProtonBin
+            ? `${wrapper} "${wineBin}" ${getProtonLaunchVerb(gameSettings)}`
+            : wrapper
         )
       }
       break

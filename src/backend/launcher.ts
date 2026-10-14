@@ -63,7 +63,11 @@ import {
 import { download, isInstalled } from './wine/runtimes/runtimes'
 import { getMainWindow } from './main_window'
 import { sendFrontendMessage } from './ipc'
-import { getUmuPath, isUmuSupported } from './utils/compatibility_layers'
+import {
+  getProtonLaunchVerb,
+  getUmuPath,
+  isUmuSupported
+} from './utils/compatibility_layers'
 import { copyFile } from 'fs/promises'
 import { app, powerSaveBlocker } from 'electron'
 import gogPresence from './storeManagers/gog/presence'
@@ -283,11 +287,15 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
             commandParts: ['start', '/unix', applicationPath],
             protonVerb: 'runinprefix',
             wait: false,
+            background: true,
             gameInstallPath: gameInfo.install.install_path,
             installFolderName: gameInfo.folder_name,
             startFolder: dirname(applicationPath),
             signal,
-            options: { logWriters: [logWriter] }
+            options: {
+              env: setupWrapperEnvVars({ appName, appRunner: runner }),
+              logWriters: [logWriter]
+            }
           })
           if (code !== 0) {
             throw new Error(
@@ -1211,6 +1219,10 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
       ret.WINEPREFIX = winePrefix
       ret.STEAM_COMPAT_DATA_PATH = winePrefix
       ret.PROTONPATH = dirname(gameSettings.wineVersion.bin)
+      if (gameSettings.additionalApplication?.enabled) {
+        // Store launchers delegate the Proton verb to umu through the environment.
+        ret.PROTON_VERB = getProtonLaunchVerb(gameSettings)
+      }
       break
     case 'crossover':
       ret.CX_BOTTLE = wineCrossoverBottle
@@ -1521,6 +1533,7 @@ function launchCleanup(rpcClient?: RpcClient) {
 
 async function runWineCommand({
   signal,
+  background = false,
   gameSettings,
   commandParts,
   wait,
@@ -1540,6 +1553,10 @@ async function runWineCommand({
     ? gameSettings
     : GlobalConfig.get().getSettings()
   const { wineVersion, winePrefix } = settings
+  const effectiveProtonVerb =
+    protonVerb === 'waitforexitandrun'
+      ? getProtonLaunchVerb(settings)
+      : protonVerb
 
   if (!skipPrefixCheckIKnowWhatImDoing && wineVersion.type !== 'crossover') {
     let requiredPrefixFiles = [
@@ -1582,7 +1599,7 @@ async function runWineCommand({
     ...options?.env,
     ...setupEnvVars(settings, gameInstallPath),
     ...setupWineEnvVars(settings, installFolderName),
-    PROTON_VERB: protonVerb
+    PROTON_VERB: effectiveProtonVerb
   }
 
   if (ignoreLogging) {
@@ -1594,7 +1611,7 @@ async function runWineCommand({
   const runnerBin = umuSupported ? await getUmuPath() : wineBin
 
   if (wineVersion.type === 'proton' && !umuSupported) {
-    commandParts.unshift(protonVerb)
+    commandParts.unshift(effectiveProtonVerb)
   }
 
   logDebug(['Running Wine command:', commandParts.join(' ')], LogPrefix.Backend)
@@ -1608,11 +1625,18 @@ async function runWineCommand({
       commandParts.unshift(...wrappers, runnerBin)
     }
 
+    signal?.throwIfAborted()
     const child = spawn(bin, commandParts, {
       env: env_vars,
       cwd: startFolder,
-      signal
+      signal: background ? undefined : signal
     })
+    if (background) {
+      child.once('spawn', () => res({ stdout: '', stderr: '', code: 0 }))
+    }
+    // A background application may outlive the game's log writer.
+    const activeLogWriters = () =>
+      background && signal?.aborted ? [] : (options?.logWriters ?? [])
     child.stdout.setEncoding('utf-8')
     child.stderr.setEncoding('utf-8')
 
@@ -1628,7 +1652,7 @@ async function runWineCommand({
     const stderr = memoryLog()
 
     child.stdout.on('data', (data: string) => {
-      options?.logWriters?.forEach((writer) => writer.writeString(data))
+      activeLogWriters().forEach((writer) => writer.writeString(data))
 
       if (options?.onOutput) {
         options.onOutput(data, child)
@@ -1638,7 +1662,7 @@ async function runWineCommand({
     })
 
     child.stderr.on('data', (data: string) => {
-      options?.logWriters?.forEach((writer) => writer.writeString(data))
+      activeLogWriters().forEach((writer) => writer.writeString(data))
 
       if (options?.onOutput) {
         options.onOutput(data, child)
@@ -1648,6 +1672,11 @@ async function runWineCommand({
     })
 
     child.on('close', async (code) => {
+      if (background && code) {
+        activeLogWriters().forEach((writer) =>
+          writer.logError(`Background Wine command exited with code ${code}`)
+        )
+      }
       const response = {
         stderr: stderr.join(''),
         stdout: stdout.join(''),
