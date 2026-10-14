@@ -11,6 +11,7 @@ import {
   WineInstallation,
   WineCommandArgs,
   GameSettings,
+  GameStatus,
   LaunchParams,
   StatusPromise
 } from 'common/types'
@@ -96,6 +97,8 @@ import type LogWriter from './logger/log_writer'
 import { isEnabled } from './storeManagers/legendary/eos_overlay/eos_overlay'
 import { Game } from 'common/types/game_manager'
 import { getKnownFixesFor } from './known_fixes/utils'
+import { launchWithAdditionalApplication } from './additional_application'
+import { backendEvents } from './backend_events'
 
 let powerDisplayId: number | null
 
@@ -226,12 +229,80 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
     status: 'launching'
   })
 
-  const command = game.launch(
-    logWriter,
-    launchArguments,
-    args,
-    skipVersionCheck
-  )
+  const launchGame = () =>
+    game.launch(logWriter, launchArguments, args, skipVersionCheck)
+  const additionalApplication = isNative
+    ? undefined
+    : gameSettings.additionalApplication
+  let stopWatchingGameStart = () => {}
+  const gameStarted = additionalApplication?.enabled
+    ? new Promise<void>((resolve) => {
+        const onStatus = (status: GameStatus) => {
+          if (
+            status.appName === appName &&
+            status.runner === runner &&
+            status.status === 'playing'
+          ) {
+            resolve()
+          }
+        }
+        backendEvents.on('gameStatusUpdate', onStatus)
+        stopWatchingGameStart = () =>
+          backendEvents.off('gameStatusUpdate', onStatus)
+      })
+    : Promise.resolve()
+  const command = additionalApplication?.enabled
+    ? launchWithAdditionalApplication({
+        application: additionalApplication,
+        signal: createAbortController(appName).signal,
+        launchGame,
+        gameStarted,
+        launchApplication: async (signal) => {
+          const applicationPath = additionalApplication.path
+          if (!isAbsolute(applicationPath) || !existsSync(applicationPath)) {
+            throw new Error(
+              `Additional application not found: ${applicationPath}`
+            )
+          }
+
+          // Ensure the same Proton runtime is available even when the companion
+          // is configured to start before the game's normal launch preparation.
+          if (
+            (await isUmuSupported(gameSettings, false)) &&
+            !(await isUmuSupported(gameSettings))
+          ) {
+            await download('umu')
+          }
+
+          await logWriter.logInfo([
+            'Starting additional application:',
+            applicationPath
+          ])
+          const { code, stderr } = await runWineCommand({
+            gameSettings,
+            commandParts: ['start', '/unix', applicationPath],
+            protonVerb: 'runinprefix',
+            wait: false,
+            gameInstallPath: gameInfo.install.install_path,
+            installFolderName: gameInfo.folder_name,
+            startFolder: dirname(applicationPath),
+            signal,
+            options: { logWriters: [logWriter] }
+          })
+          if (code !== 0) {
+            throw new Error(
+              stderr || 'Could not start the additional application'
+            )
+          }
+        },
+        onError: (error) => {
+          void logWriter.logWarning(
+            ['Additional application failed to start:', String(error)],
+            { forceLog: true }
+          )
+        }
+      })
+    : launchGame()
 
   if (runner === 'gog') {
     gogPresence.setCurrentGame(appName)
@@ -249,6 +320,8 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
       return false
     })
     .finally(async () => {
+      stopWatchingGameStart()
+      if (additionalApplication?.enabled) deleteAbortController(appName)
       await runAfterLaunchScript(gameInfo, gameSettings, logWriter)
       await logWriter.close()
     })
@@ -1447,6 +1520,7 @@ function launchCleanup(rpcClient?: RpcClient) {
 }
 
 async function runWineCommand({
+  signal,
   gameSettings,
   commandParts,
   wait,
@@ -1525,7 +1599,7 @@ async function runWineCommand({
 
   logDebug(['Running Wine command:', commandParts.join(' ')], LogPrefix.Backend)
 
-  return new Promise<{ stderr: string; stdout: string }>((res) => {
+  return new Promise((res, reject) => {
     const wrappers = options?.wrappers || []
     let bin = runnerBin
 
@@ -1536,7 +1610,8 @@ async function runWineCommand({
 
     const child = spawn(bin, commandParts, {
       env: env_vars,
-      cwd: startFolder
+      cwd: startFolder,
+      signal
     })
     child.stdout.setEncoding('utf-8')
     child.stderr.setEncoding('utf-8')
@@ -1576,7 +1651,7 @@ async function runWineCommand({
       const response = {
         stderr: stderr.join(''),
         stdout: stdout.join(''),
-        code
+        code: code ?? undefined
       }
 
       if (wait && wineVersion.wineserver) {
@@ -1596,7 +1671,7 @@ async function runWineCommand({
     })
 
     child.on('error', (error) => {
-      console.log(error)
+      reject(error)
     })
   })
 }

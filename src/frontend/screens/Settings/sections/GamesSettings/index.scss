@@ -101,3 +101,17 @@ details {
 .Field {
   text-align: left;
 }
+
+.additionalApplication {
+  margin-block: var(--space-md);
+
+  fieldset {
+    border: 0;
+    padding: 0;
+    min-width: 0;
+
+    &:disabled {
+      opacity: 0.5;
+    }
+  }
+}

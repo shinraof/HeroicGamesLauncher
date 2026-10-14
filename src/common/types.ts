@@ -225,7 +225,15 @@ export interface GameInfo {
   }
 }
 
+export interface AdditionalApplicationSettings {
+  enabled: boolean
+  path: string
+  delay: number
+  runFirst: boolean
+}
+
 export interface GameSettings {
+  additionalApplication?: AdditionalApplicationSettings
   autoInstallDxvk: boolean
   autoInstallVkd3d: boolean
   autoInstallDxvkNvapi: boolean
@@ -647,6 +655,7 @@ type ProtonVerb =
   | 'getnativepath'
 
 export type WineCommandArgs = {
+  signal?: AbortSignal
   commandParts: string[]
   wait?: boolean
   protonVerb?: ProtonVerb

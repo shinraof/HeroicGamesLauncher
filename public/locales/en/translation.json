@@ -792,6 +792,15 @@
         "addgamestoapplications": "Add games to Applications automatically",
         "addgamestostartmenu": "Add games to start menu automatically",
         "addgamestosteam": "Add games to Steam automatically",
+        "additionalApplication": {
+            "delay": "Delay between applications (seconds)",
+            "description": "Automatically launch another application with the game, using the same Wine/Proton version and prefix.",
+            "enable": "Enable additional application",
+            "first": "Run the additional application first",
+            "path": "Application path",
+            "select": "Select an additional application",
+            "title": "Additional application"
+        },
         "advertiseAvxForRosetta": "Advertise AVX for Rosetta",
         "after-launch-script-path": "Select a script to run after the game exits",
         "allow_installation_broken_anticheat": {

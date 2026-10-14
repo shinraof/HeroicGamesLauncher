@@ -52,6 +52,7 @@ import { Tabs, Tab } from '@mui/material'
 import { GameInfo } from 'common/types'
 import DisableUMU from '../../components/DisableUMU'
 import VerboseLogs from '../../components/VerboseLogs'
+import AdditionalApplication from '../../components/AdditionalApplication'
 
 const windowsPlatforms = ['Win32', 'Windows', 'windows']
 function getStartingTab(platform: string, gameInfo?: GameInfo | null): string {
@@ -230,6 +231,7 @@ export default function GamesSettings() {
         <AlternativeExe />
         <LaunchOptionSelector />
         <LauncherArgs />
+        {showWineTab && !isDefault && <AdditionalApplication />}
         <div className="Field">
           <label>{t('setting.scripts', 'Scripts:')}</label>
           <BeforeLaunchScriptPath />
