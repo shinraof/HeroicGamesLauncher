@@ -1,0 +1,75 @@
+name: AppImage fork release
+
+on:
+  push:
+    tags: ['appimage-v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appimage-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'shinraof/HeroicGamesLauncher'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: |
+          npm install --global pnpm@12.5.1
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+          pnpm download-helper-binaries
+      - name: Validate source
+        run: |
+          pnpm codecheck
+          pnpm test:ci
+      - name: Build AppImage
+        run: |
+          version="${GITHUB_REF_NAME#appimage-v}"
+          test "$(pnpm exec semver "$version")" = "$version"
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          pnpm build
+          pnpm exec electron-builder --linux AppImage --x64 --publish never \
+            -c.extraMetadata.version="$version" \
+            -c.extraMetadata.repository.url="https://github.com/$GITHUB_REPOSITORY" \
+            -c.publish.provider=github \
+            -c.publish.owner="${GITHUB_REPOSITORY%/*}" \
+            -c.publish.repo="${GITHUB_REPOSITORY#*/}"
+          cd dist
+          sha256sum Heroic-*-linux-x86_64.AppImage > SHA256SUMS
+      - name: Retain build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: heroic-appimage-x86_64
+          path: |
+            dist/*.AppImage
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Adds an Additional application section in each Windows game's Settings > Advanced.
+
+          - Choose an application to launch automatically using the game's Wine/Proton runner and prefix.
+          - Set the launch order and a delay of 0–60 seconds.
+          - Disabling the option preserves the saved configuration.
+
+          Linux x86_64 AppImage. Download the AppImage and SHA256SUMS, verify with `sha256sum -c SHA256SUMS`, then make the AppImage executable and run it.
+
+          Validation: build, type check, and 187 unit tests passed. Six GUI/integration tests and the locally packaged AppImage smoke test passed in the development environment. Wine/Proton integration tests use recording substitutes; actual Windows game execution has not been tested.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/Heroic-${RELEASE_VERSION}-linux-x86_64.AppImage" dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
+            --title "Heroic ${RELEASE_VERSION} (AppImage)" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
