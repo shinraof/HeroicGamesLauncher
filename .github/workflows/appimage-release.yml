@@ -73,9 +73,11 @@ jobs:
 
           Fixes a helper preventing the main game from starting under Proton/UMU. Both applications can now run in the same prefix without waiting for the helper to exit, including with zero launch delay.
 
+          Fixes separate UMU containers for the game and additional application, a likely cause of Agent finding the game but failing to attach/inject. Both launch orders now wait for the first container's launcher service, then reuse that container. Requires UMU 1.4 or newer and session D-Bus with `dbus-send` available.
+
           Linux x86_64 AppImage. Download the AppImage and SHA256SUMS, verify with `sha256sum -c SHA256SUMS`, then make the AppImage executable and run it.
 
-          Validation: build, type check, unit tests, and GUI/integration regression tests run before publication. The regression tests keep a companion running while the game starts, using recording Wine/Proton/UMU substitutes. Actual Windows game execution has not been tested in this environment.
+          Validation: build, type check, unit tests, and GUI/integration regression tests run before publication. The regression tests keep a companion running while the game starts and check container reuse after delayed runtime startup, using recording Wine/Proton/UMU substitutes. Actual Windows game execution and Agent injection have not been tested in this environment.
           NOTES
           gh release create "$GITHUB_REF_NAME" \
             "dist/Heroic-${RELEASE_VERSION}-linux-x86_64.AppImage" dist/SHA256SUMS \

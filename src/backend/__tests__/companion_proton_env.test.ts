@@ -24,19 +24,28 @@ describe('Proton launch mode with an additional application', () => {
   }
 
   test('GOG and other store launchers tell UMU to run alongside existing prefix processes', () => {
-    const env = setupWineEnvVars(settings(true))
+    const config = settings(true)
+    config.disableUMU = false
+    const env = setupWineEnvVars(config)
     expect(env.PROTON_VERB).toBe('run')
+    expect(env.UMU_CONTAINER_NSENTER).toBe('1')
     expect(env.WINEPREFIX).toBe('/prefix')
     expect(env.STEAM_COMPAT_DATA_PATH).toBe('/prefix')
   })
 
   test('direct Proton wrappers do not wait for the companion to exit', async () => {
+    expect(
+      setupWineEnvVars(settings(true)).UMU_CONTAINER_NSENTER
+    ).toBeUndefined()
     const flags = await getWineFlags(settings(true), 'gamemoderun')
     expect(flags['--wrapper']).toBe('gamemoderun "/proton/proton" run')
   })
 
   test('disabled companions preserve the standard Proton launch mode', async () => {
     expect(setupWineEnvVars(settings(false)).PROTON_VERB).toBeUndefined()
+    expect(
+      setupWineEnvVars(settings(false)).UMU_CONTAINER_NSENTER
+    ).toBeUndefined()
     const flags = await getWineFlags(settings(false), 'gamemoderun')
     expect(flags['--wrapper']).toBe(
       'gamemoderun "/proton/proton" waitforexitandrun'

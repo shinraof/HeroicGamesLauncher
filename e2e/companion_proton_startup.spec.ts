@@ -45,6 +45,7 @@ for (const umu of [false, true]) {
       const runner = `#!/usr/bin/env node
 const fs = require('fs')
 const path = require('path')
+const crypto = require('crypto')
 const args = process.argv.slice(2)
 const isUmu = path.basename(process.argv[1]) === 'umu-run'
 const verb = isUmu ? (process.env.PROTON_VERB || 'waitforexitandrun') : args.shift()
@@ -53,10 +54,26 @@ const log = process.env.COMPANION_TEST_LOG
 const helper = log + '.helper'
 const started = log + '.started'
 const blocked = log + '.blocked'
-const record = (kind) => fs.appendFileSync(log, JSON.stringify({kind, verb, args, prefix: process.env.WINEPREFIX, compat: process.env.STEAM_COMPAT_DATA_PATH, gameId: process.env.GAMEID, helperAlive: fs.existsSync(helper)}) + '\\n')
+const service = log + '.service'
+const reuseContainer = process.env.UMU_CONTAINER_NSENTER === '1'
+let container = String(process.pid)
+let effectiveVerb = verb
+const record = (kind) => fs.appendFileSync(log, JSON.stringify({kind, verb: effectiveVerb, args, container, prefix: process.env.WINEPREFIX, compat: process.env.STEAM_COMPAT_DATA_PATH, gameId: process.env.GAMEID, helperAlive: fs.existsSync(helper)}) + '\\n')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 ;(async () => {
-  if (args[0] === 'start') {
+  if (isUmu) {
+    if (reuseContainer && fs.existsSync(service)) {
+      container = JSON.parse(fs.readFileSync(service, 'utf8')).container
+      effectiveVerb = 'runinprefix'
+    } else if (reuseContainer && verb === 'run') {
+      // Model UMU preparing its runtime before exposing the launcher service.
+      // Starting another runner now would create a different container.
+      await sleep(1200)
+      const hash = crypto.createHash('md5').update(fs.realpathSync(process.env.WINEPREFIX)).digest('hex')
+      fs.writeFileSync(service, JSON.stringify({container, bus: 'com.steampowered.App' + hash}))
+    }
+  }
+  if (args[0] === 'start' || args[0].endsWith('Companion.exe')) {
     fs.writeFileSync(helper, String(process.pid))
     record('companion')
     // Keep the runner and its output pipes open while the helper is active.
@@ -80,6 +97,21 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
       writeFileSync(proton, runner, { mode: 0o755 })
       if (umu)
         writeFileSync(join(directory, 'umu-run'), runner, { mode: 0o755 })
+      if (umu) {
+        // Model D-Bus's real NameHasOwner reply. Only the matching prefix's
+        // service becomes visible, after the first runner finishes setup.
+        writeFileSync(
+          join(directory, 'dbus-send'),
+          `#!/usr/bin/env node
+const fs = require('fs')
+const service = ${JSON.stringify(log + '.service')}
+const bus = process.argv.at(-1).replace(/^string:/, '')
+const ready = fs.existsSync(service) && JSON.parse(fs.readFileSync(service, 'utf8')).bus === bus
+console.log('   boolean ' + ready)
+`,
+          { mode: 0o755 }
+        )
+      }
       const executablePath = process.env.HEROIC_TEST_EXECUTABLE
       const application = await electron.launch({
         executablePath,
@@ -167,15 +199,22 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
                 prefix: string
                 compat: string
                 gameId?: string
+                container: string
                 helperAlive: boolean
               }
           )
         const game = calls.find((call) => call.kind === 'game')
         const helper = calls.find((call) => call.kind === 'companion')
-        expect(game?.verb).toBe('run')
-        expect(helper?.verb).toBe('runinprefix')
+        expect(game?.verb).toBe(umu && runFirst ? 'runinprefix' : 'run')
+        expect(helper?.verb).toBe(umu && runFirst ? 'run' : 'runinprefix')
         expect(game?.helperAlive).toBe(true)
         expect(helper?.gameId).toBe('umu-0')
+        if (umu) {
+          expect(
+            helper?.container,
+            'Agent and the game must share a container, as well as a Wine prefix'
+          ).toBe(game?.container)
+        }
         expect(
           calls.some((call) => call.kind === 'companion observed game')
         ).toBe(true)

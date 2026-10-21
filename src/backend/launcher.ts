@@ -103,6 +103,7 @@ import { Game } from 'common/types/game_manager'
 import { getKnownFixesFor } from './known_fixes/utils'
 import { launchWithAdditionalApplication } from './additional_application'
 import { backendEvents } from './backend_events'
+import { waitForUmuContainer } from './umu_container'
 
 let powerDisplayId: number | null
 
@@ -278,14 +279,24 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
             await download('umu')
           }
 
+          const shareContainer = await isUmuSupported(gameSettings)
+          if (shareContainer && !additionalApplication.runFirst) {
+            await waitForUmuContainer(gameSettings.winePrefix, signal)
+          }
+
           await logWriter.logInfo([
             'Starting additional application:',
             applicationPath
           ])
+          // Proton only exposes its launcher service through `run`; an initial
+          // `runinprefix` command cannot host the game in its container later.
+          const hostContainer = shareContainer && additionalApplication.runFirst
           const { code, stderr } = await runWineCommand({
             gameSettings,
-            commandParts: ['start', '/unix', applicationPath],
-            protonVerb: 'runinprefix',
+            commandParts: hostContainer
+              ? [applicationPath]
+              : ['start', '/unix', applicationPath],
+            protonVerb: hostContainer ? 'run' : 'runinprefix',
             wait: false,
             background: true,
             gameInstallPath: gameInfo.install.install_path,
@@ -301,6 +312,12 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
             throw new Error(
               stderr || 'Could not start the additional application'
             )
+          }
+          if (shareContainer && additionalApplication.runFirst) {
+            await waitForUmuContainer(gameSettings.winePrefix, signal)
+          }
+          if (shareContainer) {
+            await logWriter.logInfo('Shared UMU container is ready')
           }
         },
         onError: (error) => {
@@ -1222,6 +1239,11 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
       if (gameSettings.additionalApplication?.enabled) {
         // Store launchers delegate the Proton verb to umu through the environment.
         ret.PROTON_VERB = getProtonLaunchVerb(gameSettings)
+        if (isLinux && !gameSettings.disableUMU) {
+          // Agent/Frida needs the same runtime container as the game, in
+          // addition to the same prefix. UMU reuses its per-prefix service.
+          ret.UMU_CONTAINER_NSENTER = '1'
+        }
       }
       break
     case 'crossover':
